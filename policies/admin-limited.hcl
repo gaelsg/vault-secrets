@@ -5,7 +5,7 @@
 # root sin las 3 llaves de unseal.
 
 path "secret/*" {
-  capabilities = ["create", "read", "update", "delete", "list"]
+  capabilities = ["create", "read", "update", "delete", "list", "patch"]
 }
 
 path "sys/policies/acl/*" {
