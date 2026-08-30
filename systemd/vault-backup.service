@@ -1,0 +1,6 @@
+[Unit]
+Description=Backup diario de Vault (Raft snapshot)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bash %h/projects/vault-secrets/scripts/backup-raft-snapshot.sh

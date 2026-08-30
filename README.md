@@ -50,3 +50,24 @@ vault login                          # con el root token
 bash scripts/bootstrap.sh            # KV, politicas, AppRole, migracion
 vault token revoke -self && rm -f ~/.vault-token
 ```
+
+## Backup (Raft snapshot diario)
+
+`scripts/backup-raft-snapshot.sh`, corrido por `systemd/vault-backup.timer` (una vez al día, workstation) en `~/vault-backups/` — **fuera del repo, fuera de la LXC de Vault**, para que un disco roto en el server no se lleve puesta también la única copia. Usa el AppRole `vault-admin`, que solo puede *tomar* snapshots (`sys/storage/raft/snapshot`, capability `read`), nunca restaurarlos — restaurar sobreescribe todo el dataset, es una operación de "break glass" que debe pasar por una decisión deliberada con el root token, no algo que un timer automático pueda hacer.
+
+```bash
+mkdir -p ~/.config/systemd/user
+ln -sf ~/projects/vault-secrets/systemd/vault-backup.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now vault-backup.timer
+```
+
+El archivo `.snap` está cifrado con la barrier key de Vault (derivada de las llaves de unseal) — no es texto plano, pero tampoco es público: nunca se commitea, permisos 600.
+
+**Restaurar (procedimiento, no automatizado — requiere el root token):**
+
+```bash
+vault operator raft snapshot restore /ruta/al/vault-snapshot-YYYYMMDD-HHMMSS.snap
+```
+
+Requiere estar autenticado como root o con una política que tenga `sudo` sobre `sys/storage/raft/snapshot` (el AppRole `vault-admin` deliberadamente no lo tiene). No se ejecutó un restore real de extremo a extremo contra el Vault en producción para verificar esto — hacerlo hubiera significado sellar/interrumpir un servicio del que ya dependen 4 proyectos reales, un riesgo innecesario para un homelab. El comando está verificado contra la documentación oficial de Vault, no probado empíricamente — documentado así, no presentado como algo que no es.
