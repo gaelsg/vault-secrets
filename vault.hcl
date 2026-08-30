@@ -16,6 +16,18 @@ listener "tcp" {
   address       = "0.0.0.0:8200"
   tls_cert_file = "/etc/vault.d/tls/vault-cert.pem"
   tls_key_file  = "/etc/vault.d/tls/vault-key.pem"
+
+  # Permite que Prometheus scrapee /v1/sys/metrics sin token - Vault lo
+  # bloquea por defecto. Sigue siendo TLS, y este endpoint no expone
+  # contenido de secretos, solo metricas operativas (latencia, seals, etc).
+  telemetry {
+    unauthenticated_metrics_access = true
+  }
+}
+
+telemetry {
+  prometheus_retention_time = "24h"
+  disable_hostname          = true
 }
 
 api_addr     = "https://192.168.8.91:8200"
