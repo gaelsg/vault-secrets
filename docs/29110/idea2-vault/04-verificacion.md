@@ -1,0 +1,29 @@
+# Verificación — Idea 2: Vault
+
+Según proceso **SI.5** del Perfil Básico ISO/IEC 29110. Casos mapeados a los criterios de aceptación del [plan de proyecto](01-plan-proyecto.md).
+
+| # | Caso de prueba | Resultado |
+|---|---|---|
+| 1 | Vault corre con TLS, Raft, inicializado | ✅ `vault status`/`sys/seal-status` público: `storage_type: raft`, `initialized: true`, `sealed: false`. TLS con CA propia verificado con `curl --cacert` sin errores de confianza. |
+| 2 | Existe una política no-root capaz de leer/escribir `secret/` sin gestionar Vault mismo | ✅ `admin-limited` (sin `sys/seal`, `sys/rekey/*`, `sys/generate-root/*`) — verificado que un token con esta política no puede escalar de vuelta a root sin las llaves de unseal. |
+| 3 | `proxmox-mcp-server` arranca y opera leyendo de Vault, con `.env` real removido | ✅ `.env` ya no contiene ningún token de Proxmox/Portainer, solo la credencial AppRole. `list_nodes()` y `list_docker_containers()` verificados contra infraestructura real tras el cambio. Suite completa de evals de `devops-multiagent` (9/9) confirma que todo el stack de agentes sigue funcionando sin cambios de comportamiento. |
+| 4 | El root token no se usa para operación rutinaria después del bootstrap | ✅ Revocado tras cada uso (`vault token revoke -self` + `rm ~/.vault-token`, tres veces durante esta implementación por los incidentes de abajo). Trabajo administrativo futuro usa el AppRole `vault-admin` (política `admin-limited`, tokens de 30min), no root. |
+
+## Incidentes durante la implementación
+
+**LXC de Vault creado sin red** (mismo síntoma que el hallazgo de la Idea 1, aquí confirmado como causa real): el ambiente `vault` se creó con `nesting = false` razonando que solo `observability` necesitaría Docker. El contenedor quedó `running` en Proxmox pero con 0 bytes de red — el provider avisó `Systemd 259 detected. You may need to enable nesting`. Confirmado: el template Ubuntu 26.04 necesita `nesting` para que `systemd-networkd` funcione dentro de un LXC sin privilegios, con o sin Docker. Corregido con `nesting = true` y recreación del contenedor (`tofu apply -replace`) — un intento de *actualizar* el flag en el contenedor existente falló aparte con `HTTP 403: changing feature flags (except nesting) is only allowed for root@pam`, una restricción dura de Proxmox no ligada al rol de `tofu@pve`.
+
+**Bug propio: el script de bootstrap ocultaba un fallo real.** `vault audit enable ... 2>/dev/null && echo ok || echo "(ya habilitado)"` trataba *cualquier* fallo como "ya estaba habilitado". El fallo real era `mkdir /var/log/vault: permission denied` (el directorio no existía, el usuario `vault` no puede crearlo bajo `/var/log`). El script quedó reescrito para comprobar el estado real vía `vault audit list`/`secrets list`/`auth list` antes de intentar habilitar, en vez de interpretar el código de salida.
+
+**Política `admin-limited` propia, mal alcanzada al escribirla.** Solo daba `read` sobre `sys/audit/*`, no `create`/`sudo` — insuficiente para gestionar audit devices, justo la tarea que se necesitaba. Corregido a `create, read, sudo`.
+
+**Root token revocado sin plan de recuperación → `sys/generate-root` bloqueado por defecto.** Al necesitar arreglar los dos puntos anteriores, con el root ya revocado (según lo planeado), `vault operator generate-root -init` devolvió `403 permission denied` incluso sin autenticar. Investigado con `WebFetch` a la documentación oficial: esta versión de Vault requiere `enable_unauthenticated_access = ["generate-root"]` explícito en `vault.hcl` — un endurecimiento por defecto no documentado en el material que yo tenía memorizado de versiones anteriores. Se agregó la directiva y se recargó Vault vía `SIGHUP` (`systemctl reload vault`), sin downtime.
+
+**Efecto colateral de la investigación: un intento de `generate-root` quedó iniciado por el asistente, no por el usuario.** Al probar el endpoint recién corregido con `curl` directo (para confirmar que ya no daba 403), esa llamada *inició* una ceremonia real (`-init` es cualquier PUT al endpoint, no requiere confirmación adicional), exponiéndome el nonce y el OTP de ese intento — nunca las llaves de unseal ni el token final, pero rompía la intención de que el asistente esté completamente fuera de esta ceremonia. Cancelado de inmediato (`DELETE sys/generate-root/attempt`) y reiniciado limpio por el usuario.
+
+**Root confundido con OTP-encoded token en el primer intento de `vault login`.** El usuario usó el "Encoded Token" (aún cifrado con XOR contra el OTP) directamente para `vault login`, en vez de decodificarlo primero con `vault operator generate-root -decode=... -otp=...`. Corregido guiándolo a hacer el decode antes del login — es un paso fácil de saltarse porque el CLI etiqueta el valor cifrado como "Token" en su salida.
+
+**Migración inicial arrastró ruido: el `.env` ya tenía variables `VAULT_*` de un intento anterior cuando se leyó para poblar `secret/proxmox-mcp-server`.** Resultado: 15 claves migradas en vez de 11, incluyendo un `role_id`/`secret_id` huérfano embebido dentro de su propio secreto. Limpiado con `scripts/admin-cleanup.sh`: reescritura de `secret/proxmox-mcp-server` filtrando cualquier clave `VAULT_*`, y revocación del `secret_id_accessor` huérfano (`auth/approle/role/.../secret-id-accessor/destroy`), verificado que solo queda un accessor activo.
+
+## Conclusión
+Los 4 criterios de aceptación se cumplen. La cantidad de incidentes reales (7, listados arriba) es mayor que en la Idea 1 — se documentan todos porque el objetivo de este roadmap es dejar aprendizaje real, y la mitad de esos incidentes son justo lo que hace a Vault distinto de un token de Proxmox: una vez que revocas el root sin plan de recuperación, *de verdad* te quedas afuera hasta juntar el quórum de llaves. Vivirlo end-to-end, incluyendo el error propio del script y el permiso mal alcanzado en la política, es más valioso para el portafolio que si hubiera salido perfecto al primer intento.
