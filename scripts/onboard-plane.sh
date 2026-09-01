@@ -35,6 +35,15 @@ SECRET_KEY="$(get_val SECRET_KEY)"
 AWS_ACCESS_KEY_ID="$(get_val AWS_ACCESS_KEY_ID)"
 AWS_SECRET_ACCESS_KEY="$(get_val AWS_SECRET_ACCESS_KEY)"
 LIVE_SERVER_SECRET_KEY="$(get_val LIVE_SERVER_SECRET_KEY)"
+# DATABASE_URL/AMQP_URL son las credenciales que Django realmente usa (no
+# POSTGRES_PASSWORD/RABBITMQ_PASSWORD sueltos) -- el docker-compose.yaml de
+# Plane tiene `${DATABASE_URL:-postgresql://plane:plane@plane-db/plane}` y
+# el equivalente para AMQP_URL: si el valor en plane.env queda vacio, ese
+# fallback HARDCODEADO EN EL YAML (con la password placeholder vieja) es lo
+# que termina usando la app, sin importar lo que diga POSTGRES_PASSWORD.
+# Incidente real 2026-09-01, ver docs/bitacora/.
+DATABASE_URL="$(get_val DATABASE_URL)"
+AMQP_URL="$(get_val AMQP_URL)"
 
 set -a
 # shellcheck disable=SC1090
@@ -63,7 +72,9 @@ vault kv put secret/plane \
   django_secret_key="$SECRET_KEY" \
   minio_access_key="$AWS_ACCESS_KEY_ID" \
   minio_secret_key="$AWS_SECRET_ACCESS_KEY" \
-  live_server_secret_key="$LIVE_SERVER_SECRET_KEY" >/dev/null
+  live_server_secret_key="$LIVE_SERVER_SECRET_KEY" \
+  database_url="$DATABASE_URL" \
+  amqp_url="$AMQP_URL" >/dev/null
 
 vault token revoke -self >/dev/null 2>&1 || true
 echo "== Listo. secret/plane escrito, token de vault-admin de esta sesion revocado. =="
