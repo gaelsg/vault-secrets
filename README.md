@@ -45,6 +45,8 @@ export VAULT_ADDR="https://192.168.8.91:8200"
 export VAULT_CACERT="$HOME/projects/vault-secrets/tls/ca-cert.pem"
 vault operator init      # guarda las 5 llaves + root token en un gestor de contraseñas
 vault operator unseal    # x3, con llaves distintas
+# o, para desellar despues de un reinicio: scripts/unseal.sh (pide las
+# keys interactivamente, sin guardarlas nunca en disco ni en variables)
 
 vault login                          # con el root token
 bash scripts/bootstrap.sh            # KV, politicas, AppRole, migracion
@@ -71,3 +73,13 @@ vault operator raft snapshot restore /ruta/al/vault-snapshot-YYYYMMDD-HHMMSS.sna
 ```
 
 Requiere estar autenticado como root o con una política que tenga `sudo` sobre `sys/storage/raft/snapshot` (el AppRole `vault-admin` deliberadamente no lo tiene). No se ejecutó un restore real de extremo a extremo contra el Vault en producción para verificar esto — hacerlo hubiera significado sellar/interrumpir un servicio del que ya dependen 4 proyectos reales, un riesgo innecesario para un homelab. El comando está verificado contra la documentación oficial de Vault, no probado empíricamente — documentado así, no presentado como algo que no es.
+
+## Onboarding de un proyecto cuyas credenciales no nacen en Vault
+
+La mayoría de los proyectos generan sus secretos directo en Vault (`vault kv put`, nunca en un
+`.env` primero). `plane` es la primera excepción: sus credenciales internas (Postgres, RabbitMQ,
+MinIO, Django `SECRET_KEY`) las genera el propio instalador oficial de Plane, en un `plane.env`
+dentro del LXC. `scripts/onboard-plane.sh` las trae a `secret/plane` como copia de respaldo (antes
+solo existían en un archivo plano en un único LXC) usando el AppRole `vault-admin` — mismo patrón
+de "nunca root/unseal" que el resto del repo, sin dejar copias locales (`scp` a un temporal,
+`shred` al salir).
