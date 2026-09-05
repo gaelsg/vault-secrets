@@ -83,3 +83,14 @@ dentro del LXC. `scripts/onboard-plane.sh` las trae a `secret/plane` como copia 
 solo existían en un archivo plano en un único LXC) usando el AppRole `vault-admin` — mismo patrón
 de "nunca root/unseal" que el resto del repo, sin dejar copias locales (`scp` a un temporal,
 `shred` al salir).
+
+## Segmentación de red con pve-firewall (2026-09-05)
+
+Primer paso de la mejora de seguridad de red del homelab: `/etc/pve/firewall/103.fw`
+restringe el puerto 8200 de Vault a los 3 consumidores reales (workstation, el host
+`batman01`, y la LXC `observability`), `policy_in: DROP` para el resto. Incidente
+real: las reglas no se aplicaban hasta activar el flag `firewall=1` en la interfaz
+de red de la LXC (`/etc/pve/lxc/103.conf`), un paso aparte de escribir el `.fw` —
+corregido también en el módulo de `proxmox-iac` para que las LXC nuevas lo traigan
+por defecto. Detalle completo, incluida la verificación real (acceso cortado desde
+una LXC no autorizada), en `docs/bitacora/2026-09-05-firewall-vault.md`.
